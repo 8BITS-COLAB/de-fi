@@ -1,16 +1,14 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"math/big"
 	"os"
 
 	"github.com/ElioenaiFerrari/de-fi/api"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ElioenaiFerrari/de-fi/controllers"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 func init() {
@@ -24,46 +22,35 @@ func main() {
 		panic(err)
 	}
 
-	privateKey, err := crypto.HexToECDSA(os.Getenv("ETHEREUM_PRIVATE_KEY"))
+	auth, err := api.Auth(client)
 
 	if err != nil {
 		panic(err)
 	}
 
-	address := crypto.PubkeyToAddress(privateKey.PublicKey)
-
-	nonce, err := client.PendingNonceAt(context.Background(), address)
-
-	if err != nil {
-		panic(err)
-	}
-
-	gasLimit := uint64(3000000)
-	gasPrice, err := client.SuggestGasPrice(context.Background())
+	addr, _, _, _ := api.DeployVaultContract(auth, client)
+	conn, err := api.NewVaultContract(addr, client)
 
 	if err != nil {
 		panic(err)
 	}
 
-	chainID, err := client.NetworkID(context.Background())
+	server := echo.New()
+	router := server.Group("/api")
 
-	if err != nil {
-		panic(err)
-	}
+	server.Use(middleware.Logger())
+	server.Use(middleware.Recover())
+	server.Use(middleware.CORS())
+	server.Use(middleware.Secure())
+	server.Use(middleware.Gzip())
+	server.Use(middleware.BodyLimit("1M"))
 
-	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, chainID)
+	vaultController := controllers.NewVaultController(client, conn, auth)
 
-	if err != nil {
-		panic(err)
-	}
+	router.POST("/vaults", vaultController.Create)
+	router.PUT("/vaults/:from", vaultController.Update)
+	router.GET("/vaults/:from", vaultController.Get)
 
-	auth.GasLimit = gasLimit
-	auth.GasPrice = gasPrice
-	auth.Nonce = big.NewInt(int64(nonce))
-	auth.Value = big.NewInt(0)
-
-	_, tx, _, _ := api.DeployVaultContract(auth, client)
-
-	fmt.Println(tx.Hash().Hex())
+	server.Logger.Fatal(server.Start(":3000"))
 
 }
